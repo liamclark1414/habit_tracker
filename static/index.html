@@ -72,6 +72,10 @@
     <input type="text" id="edName" maxlength="80" required placeholder="e.g. Read 20 pages">
     <label>Days</label>
     <div class="days" id="edDays"></div>
+    <label for="edGoal">Daily goal in minutes (optional)</label>
+    <input type="text" id="edGoal" inputmode="numeric" placeholder="e.g. 15">
+    <label for="edDomain">Auto-track time on website (optional, needs browser extension)</label>
+    <input type="text" id="edDomain" placeholder="e.g. keybr.com">
     <label>Colour</label>
     <div class="colors" id="edColors"></div>
     <div class="actions">
@@ -110,6 +114,13 @@ function schedLabel(days) {
   return [...days].map(i => DAY_NAMES[i]).join(", ");
 }
 
+function progress(h) {
+  if (!h.auto_domain && !h.goal_minutes) return "";
+  const mins = Math.floor(h.today_seconds / 60);
+  const goal = h.goal_minutes ? ` / ${h.goal_minutes}` : "";
+  return ` · ${mins}${goal} min today${h.auto_domain ? ` on ${esc(h.auto_domain)}` : ""}`;
+}
+
 function render() {
   const today = parse(state.today);
   document.getElementById("today").textContent =
@@ -139,7 +150,7 @@ function render() {
       <div class="row">
         <button class="check ${doneToday ? "done" : ""}" ${!due && !doneToday ? "disabled title='Not scheduled today'" : ""}
           onclick="toggle(${h.id}, '${state.today}')">${doneToday ? "✓" : ""}</button>
-        <div class="grow"><div class="name">${esc(h.name)}</div><div class="meta">${schedLabel(h.days)}</div></div>
+        <div class="grow"><div class="name">${esc(h.name)}</div><div class="meta">${schedLabel(h.days)}${progress(h)}</div></div>
         <div class="streak"><b>${h.streak}</b> 🔥<br>best ${h.best}</div>
         <button class="icon" title="Edit" onclick="openEditor(${h.id})">✎</button>
       </div>
@@ -156,6 +167,8 @@ function openEditor(id) {
   editing = state.habits.find(h => h.id === id) || null;
   document.getElementById("edTitle").textContent = editing ? "Edit habit" : "New habit";
   document.getElementById("edName").value = editing ? editing.name : "";
+  document.getElementById("edGoal").value = editing && editing.goal_minutes ? editing.goal_minutes : "";
+  document.getElementById("edDomain").value = editing ? editing.auto_domain : "";
   document.getElementById("edDelete").style.visibility = editing ? "visible" : "hidden";
   edDays = new Set(editing ? editing.days : "0123456");
   edColor = editing ? editing.color : COLORS[state.habits.length % COLORS.length];
@@ -176,7 +189,9 @@ async function save() {
   const name = document.getElementById("edName").value.trim();
   if (!name) return;
   if (!edDays.size) { alert("Pick at least one day."); return; }
-  const body = { name, color: edColor, days: [...edDays].sort().join("") };
+  const body = { name, color: edColor, days: [...edDays].sort().join(""),
+    goal_minutes: parseInt(document.getElementById("edGoal").value) || 0,
+    auto_domain: document.getElementById("edDomain").value.trim() };
   if (editing) await api("/api/habits/update", { ...body, id: editing.id });
   else await api("/api/habits/create", body);
   editor.close();
@@ -190,6 +205,7 @@ async function del() {
 
 api("/api/habits");
 setInterval(() => fetch("/api/ping").catch(() => {}), 20000);
+setInterval(() => api("/api/habits"), 60000); // pick up auto-tracked minutes
 // refresh at midnight / when window regains focus
 window.addEventListener("focus", () => api("/api/habits"));
 </script>

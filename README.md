@@ -17,3 +17,15 @@ This adds a **Habit Tracker** icon to your desktop and app menu. Or run it direc
 The app opens in a Chrome/Chromium app window if one is installed, otherwise your default browser. It stops itself about 90 seconds after the window is closed.
 
 Data is stored in `~/.local/share/habit_tracker/habits.db`.
+
+## Auto-tracking website time (Firefox extension)
+Habits can have a daily goal in minutes and a website to auto-track (e.g. `keybr.com`, goal 15).
+The extension in `extension/` counts time while a keybr tab is focused and you've typed in the last 30 seconds,
+then sends it to the app. If the app is closed, time is saved in the extension and sent the next time the app runs.
+The habit is ticked automatically once the goal is reached.
+
+To track other sites, add them to `content_scripts.matches` in `extension/manifest.json`.
+
+**Load it:** open `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → pick `extension/manifest.json`.
+Standard Firefox removes temporary add-ons on restart; to keep it installed, sign it for free as an unlisted add-on
+(`npx web-ext sign --channel=unlisted` in `extension/`, with an addons.mozilla.org API key) and install the resulting `.xpi`.

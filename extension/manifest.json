@@ -1,0 +1,14 @@
+{
+  "manifest_version": 2,
+  "name": "Habit Tracker Activity",
+  "version": "1.0",
+  "description": "Counts active time on chosen sites and reports it to your local Habit Tracker app.",
+  "icons": { "64": "icon.svg" },
+  "permissions": ["storage", "http://127.0.0.1:8765/*"],
+  "background": { "scripts": ["background.js"] },
+  "content_scripts": [{
+    "matches": ["*://keybr.com/*", "*://www.keybr.com/*"],
+    "js": ["content.js"]
+  }],
+  "browser_specific_settings": { "gecko": { "id": "habit-tracker@local" } }
+}

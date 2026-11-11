@@ -6,6 +6,7 @@ a browser window. The server shuts itself down a while after the window closes.
 """
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -54,8 +55,19 @@ def init_db():
                 day TEXT NOT NULL,
                 PRIMARY KEY (habit_id, day)
             );
+            CREATE TABLE IF NOT EXISTS activity (
+                habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+                day TEXT NOT NULL,
+                seconds INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (habit_id, day)
+            );
             """
         )
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
+        if "goal_minutes" not in cols:
+            conn.execute("ALTER TABLE habits ADD COLUMN goal_minutes INTEGER NOT NULL DEFAULT 0")
+        if "auto_domain" not in cols:
+            conn.execute("ALTER TABLE habits ADD COLUMN auto_domain TEXT NOT NULL DEFAULT ''")
 
 
 def scheduled(days, d):
@@ -103,12 +115,44 @@ def list_habits():
             done = {r["day"] for r in conn.execute(
                 "SELECT day FROM checks WHERE habit_id = ?", (h["id"],))}
             cur, best = streaks(h["days"], done, today)
+            row = conn.execute(
+                "SELECT seconds FROM activity WHERE habit_id = ? AND day = ?",
+                (h["id"], today.isoformat())).fetchone()
             out.append({
                 "id": h["id"], "name": h["name"], "color": h["color"],
                 "days": h["days"], "created": h["created"],
                 "checks": sorted(done), "streak": cur, "best": best,
+                "goal_minutes": h["goal_minutes"], "auto_domain": h["auto_domain"],
+                "today_seconds": row["seconds"] if row else 0,
             })
     return {"today": today.isoformat(), "habits": out}
+
+
+def clean_domain(v):
+    d = str(v or "").strip().lower()
+    d = re.sub(r"^[a-z]+://", "", d).split("/")[0]
+    if d.startswith("www."):
+        d = d[4:]
+    return d[:100]
+
+
+def domain_matches(habit_domain, host):
+    host = host.lower().removeprefix("www.")
+    return bool(habit_domain) and (host == habit_domain or host.endswith("." + habit_domain))
+
+
+def record_activity(conn, host, day, seconds):
+    """Add browsing time to auto-tracked habits; tick them once the goal is met."""
+    for h in conn.execute("SELECT * FROM habits WHERE auto_domain != ''").fetchall():
+        if not domain_matches(h["auto_domain"], host):
+            continue
+        conn.execute(
+            "INSERT INTO activity VALUES (?, ?, ?) ON CONFLICT(habit_id, day) "
+            "DO UPDATE SET seconds = seconds + excluded.seconds", (h["id"], day, seconds))
+        total = conn.execute("SELECT seconds FROM activity WHERE habit_id = ? AND day = ?",
+                             (h["id"], day)).fetchone()["seconds"]
+        if total >= h["goal_minutes"] * 60:
+            conn.execute("INSERT OR IGNORE INTO checks VALUES (?, ?)", (h["id"], day))
 
 
 def clean_days(v):
@@ -154,28 +198,44 @@ class Handler(BaseHTTPRequestHandler):
         _last_seen = time.time()
         # reject cross-origin writes from other sites in the browser
         origin = self.headers.get("Origin")
-        if origin and origin not in (f"http://{HOST}:{PORT}", f"http://localhost:{PORT}"):
+        from_ext = bool(origin) and origin.startswith(("moz-extension://", "chrome-extension://"))
+        if from_ext and self.path != "/api/activity":
+            return self._json({"error": "forbidden"}, 403)
+        if origin and not from_ext and origin not in (f"http://{HOST}:{PORT}", f"http://localhost:{PORT}"):
             return self._json({"error": "forbidden"}, 403)
         try:
             data = self._body()
         except json.JSONDecodeError:
             return self._json({"error": "bad json"}, 400)
         with _db_lock, db() as conn:
-            if self.path == "/api/habits/create":
+            if self.path == "/api/activity":
+                # {"host": "keybr.com", "days": {"2026-11-11": 120, ...}}
+                for day, secs in dict(data.get("days", {})).items():
+                    day = date.fromisoformat(day).isoformat()
+                    secs = max(0, min(int(secs), 86400))
+                    if day <= date.today().isoformat() and secs:
+                        record_activity(conn, str(data.get("host", "")), day, secs)
+                return self._json({"ok": True})
+            elif self.path == "/api/habits/create":
                 name = str(data.get("name", "")).strip()[:80]
                 if not name:
                     return self._json({"error": "name required"}, 400)
                 conn.execute(
-                    "INSERT INTO habits (name, color, days, created) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO habits (name, color, days, created, goal_minutes, auto_domain) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (name, str(data.get("color", "#4f8cff"))[:9],
                      clean_days(data.get("days", "0123456")) or "0123456",
-                     date.today().isoformat()))
+                     date.today().isoformat(), max(0, int(data.get("goal_minutes") or 0)),
+                     clean_domain(data.get("auto_domain"))))
             elif self.path == "/api/habits/update":
                 name = str(data.get("name", "")).strip()[:80]
                 conn.execute(
-                    "UPDATE habits SET name = ?, color = ?, days = ? WHERE id = ?",
+                    "UPDATE habits SET name = ?, color = ?, days = ?, goal_minutes = ?, "
+                    "auto_domain = ? WHERE id = ?",
                     (name, str(data.get("color"))[:9],
-                     clean_days(data.get("days")) or "0123456", int(data["id"])))
+                     clean_days(data.get("days")) or "0123456",
+                     max(0, int(data.get("goal_minutes") or 0)),
+                     clean_domain(data.get("auto_domain")), int(data["id"])))
             elif self.path == "/api/habits/delete":
                 conn.execute("DELETE FROM habits WHERE id = ?", (int(data["id"]),))
             elif self.path == "/api/toggle":
