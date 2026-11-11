@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Habit Tracker</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7385;
+    --border: #e2e5eb; --empty: #ebedf0; --off: transparent; --accent: #4f8cff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161b; --card: #1e2128; --text: #e8eaf0; --muted: #8b93a5;
+            --border: #2c3039; --empty: #2a2e37; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 16px 60px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 24px; }
+  .sub { color: var(--muted); }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border);
+           background: var(--card); color: var(--text); padding: 6px 12px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-top: 16px; }
+  .row { display: flex; align-items: center; gap: 12px; }
+  .check { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--c); background: none;
+           padding: 0; flex: none; font-size: 20px; color: #fff; }
+  .check.done { background: var(--c); }
+  .check:disabled { opacity: .35; cursor: default; }
+  .name { font-weight: 600; font-size: 17px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .grow { flex: 1; min-width: 0; }
+  .streak { text-align: right; font-size: 13px; color: var(--muted); }
+  .streak b { font-size: 20px; color: var(--text); }
+  .heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 13px); gap: 3px;
+          margin-top: 12px; overflow-x: auto; padding-bottom: 4px; }
+  .cell { width: 13px; height: 13px; border-radius: 3px; background: var(--empty); cursor: pointer; }
+  .cell.off { background: var(--off); outline: 1px dashed var(--border); outline-offset: -1px; }
+  .cell.done { background: var(--c); }
+  .cell.future { visibility: hidden; }
+  .cell.today { box-shadow: 0 0 0 1.5px var(--text); }
+  .icon { border: none; background: none; color: var(--muted); padding: 4px 6px; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; }
+  dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--card); color: var(--text);
+           width: min(420px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13px; }
+  input[type=text] { width: 100%; font: inherit; padding: 8px; border-radius: 8px;
+                     border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .days, .colors { display: flex; gap: 6px; flex-wrap: wrap; }
+  .days button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .swatch { width: 28px; height: 28px; border-radius: 50%; padding: 0; border: 2px solid transparent; }
+  .swatch.on { border-color: var(--text); }
+  .actions { display: flex; justify-content: space-between; margin-top: 20px; gap: 8px; }
+  .danger { color: #e5484d; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Habit Tracker</h1><div class="sub" id="today"></div></div>
+    <button class="primary" onclick="openEditor()">+ New habit</button>
+  </header>
+  <div id="list"></div>
+</main>
+
+<dialog id="editor">
+  <form method="dialog" onsubmit="save(); return false;">
+    <h2 id="edTitle" style="margin:0">New habit</h2>
+    <label for="edName">Name</label>
+    <input type="text" id="edName" maxlength="80" required placeholder="e.g. Read 20 pages">
+    <label>Days</label>
+    <div class="days" id="edDays"></div>
+    <label>Colour</label>
+    <div class="colors" id="edColors"></div>
+    <div class="actions">
+      <button type="button" class="danger" id="edDelete" onclick="del()">Delete</button>
+      <span style="display:flex;gap:8px;margin-left:auto">
+        <button type="button" onclick="editor.close()">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </span>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const COLORS = ["#4f8cff","#30a46c","#e5484d","#f76b15","#ffb224","#8e4ec6","#d6409f","#12a594"];
+const WEEKS = 18;
+let state = { today: "", habits: [] };
+let editing = null, edDays = new Set(), edColor = COLORS[0];
+
+const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const parse = s => { const [y,m,d] = s.split("-").map(Number); return new Date(y, m-1, d); };
+const wd = d => (d.getDay() + 6) % 7; // Mon=0
+const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) } : {});
+  if (!r.ok) throw new Error((await r.json()).error);
+  state = await r.json();
+  render();
+}
+
+function schedLabel(days) {
+  if (days === "0123456") return "Every day";
+  if (days === "01234") return "Weekdays";
+  if (days === "56") return "Weekends";
+  return [...days].map(i => DAY_NAMES[i]).join(", ");
+}
+
+function render() {
+  const today = parse(state.today);
+  document.getElementById("today").textContent =
+    today.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const list = document.getElementById("list");
+  if (!state.habits.length) {
+    list.innerHTML = `<div class="card empty">No habits yet. Add your first one to get started.</div>`;
+    return;
+  }
+  // heatmap start: Monday WEEKS-1 weeks ago
+  const start = new Date(today); start.setDate(start.getDate() - wd(today) - (WEEKS-1)*7);
+  list.innerHTML = state.habits.map(h => {
+    const done = new Set(h.checks);
+    const due = h.days.includes(String(wd(today)));
+    const doneToday = done.has(state.today);
+    let cells = "";
+    for (let i = 0; i < WEEKS*7; i++) {
+      const d = new Date(start); d.setDate(start.getDate() + i);
+      const k = iso(d), cls = ["cell"];
+      if (d > today) cls.push("future");
+      else if (done.has(k)) cls.push("done");
+      else if (!h.days.includes(String(wd(d)))) cls.push("off");
+      if (k === state.today) cls.push("today");
+      cells += `<div class="${cls.join(" ")}" title="${d.toDateString()}" data-day="${k}"></div>`;
+    }
+    return `<div class="card" style="--c:${h.color}" data-id="${h.id}">
+      <div class="row">
+        <button class="check ${doneToday ? "done" : ""}" ${!due && !doneToday ? "disabled title='Not scheduled today'" : ""}
+          onclick="toggle(${h.id}, '${state.today}')">${doneToday ? "✓" : ""}</button>
+        <div class="grow"><div class="name">${esc(h.name)}</div><div class="meta">${schedLabel(h.days)}</div></div>
+        <div class="streak"><b>${h.streak}</b> 🔥<br>best ${h.best}</div>
+        <button class="icon" title="Edit" onclick="openEditor(${h.id})">✎</button>
+      </div>
+      <div class="heat">${cells}</div>
+    </div>`;
+  }).join("");
+  list.querySelectorAll(".cell:not(.future)").forEach(c =>
+    c.onclick = () => toggle(+c.closest(".card").dataset.id, c.dataset.day));
+}
+
+const toggle = (id, day) => api("/api/toggle", { id, day });
+
+function openEditor(id) {
+  editing = state.habits.find(h => h.id === id) || null;
+  document.getElementById("edTitle").textContent = editing ? "Edit habit" : "New habit";
+  document.getElementById("edName").value = editing ? editing.name : "";
+  document.getElementById("edDelete").style.visibility = editing ? "visible" : "hidden";
+  edDays = new Set(editing ? editing.days : "0123456");
+  edColor = editing ? editing.color : COLORS[state.habits.length % COLORS.length];
+  drawPickers();
+  editor.showModal();
+  document.getElementById("edName").focus();
+}
+
+function drawPickers() {
+  document.getElementById("edDays").innerHTML = DAY_NAMES.map((n, i) =>
+    `<button type="button" class="${edDays.has(String(i)) ? "on" : ""}" onclick="flipDay('${i}')">${n}</button>`).join("");
+  document.getElementById("edColors").innerHTML = COLORS.map(c =>
+    `<button type="button" class="swatch ${c === edColor ? "on" : ""}" style="background:${c}" onclick="edColor='${c}';drawPickers()"></button>`).join("");
+}
+function flipDay(i) { edDays.has(i) ? edDays.delete(i) : edDays.add(i); drawPickers(); }
+
+async function save() {
+  const name = document.getElementById("edName").value.trim();
+  if (!name) return;
+  if (!edDays.size) { alert("Pick at least one day."); return; }
+  const body = { name, color: edColor, days: [...edDays].sort().join("") };
+  if (editing) await api("/api/habits/update", { ...body, id: editing.id });
+  else await api("/api/habits/create", body);
+  editor.close();
+}
+
+async function del() {
+  if (!confirm(`Delete "${editing.name}" and all its history?`)) return;
+  await api("/api/habits/delete", { id: editing.id });
+  editor.close();
+}
+
+api("/api/habits");
+setInterval(() => fetch("/api/ping").catch(() => {}), 20000);
+// refresh at midnight / when window regains focus
+window.addEventListener("focus", () => api("/api/habits"));
+</script>
+</body>
+</html>
