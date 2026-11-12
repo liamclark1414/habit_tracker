@@ -125,6 +125,24 @@
            background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-weight: 600;
            transition: .35s cubic-bezier(.3,1.4,.5,1); pointer-events: none; z-index: 20; white-space: nowrap; }
   .toast.show { transform: translate(-50%, 0); opacity: 1; }
+  details.pbs { background: var(--card); border: 1px solid var(--border); border-radius: 14px; margin-top: 14px; padding: 4px 16px; }
+  details.pbs summary { cursor: pointer; font-weight: 700; font-size: 16px; padding: 10px 0; list-style: none;
+                        display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  details.pbs summary::-webkit-details-marker { display: none; }
+  details.pbs summary::after { content: "▾"; color: var(--muted); transition: transform .2s; }
+  details.pbs:not([open]) summary::after { transform: rotate(-90deg); }
+  .pb-note { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: auto; }
+  .pb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding-bottom: 14px; }
+  .pb { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; text-decoration: none; color: inherit;
+        display: block; transition: border-color .2s, transform .2s; position: relative; }
+  .pb:hover { border-color: #fc4c02; transform: translateY(-1px); }
+  .pb .d { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .pb .t { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; margin: 2px 0; }
+  .pb .s { font-size: 12px; color: var(--muted); }
+  .pb .new { position: absolute; top: 8px; right: 8px; background: var(--gold); color: #fff; font-size: 10px;
+             font-weight: 800; padding: 1px 6px; border-radius: 999px; }
+  .pb-bar { height: 4px; background: var(--empty); border-radius: 2px; overflow: hidden; margin: 0 0 12px; }
+  .pb-bar i { display: block; height: 100%; background: #fc4c02; transition: width .6s; }
   #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
 
   .empty { text-align: center; color: var(--muted); padding: 40px 0; }
@@ -189,6 +207,11 @@
       <button class="icon" id="soundBtn" onclick="toggleSound()" title="Toggle sound"></button>
     </div>
   </section>
+  <details class="pbs" id="pbs" hidden open>
+    <summary>🏅 Running personal bests <span class="pb-note" id="pbNote"></span></summary>
+    <div class="pb-bar" id="pbBar"><i></i></div>
+    <div class="pb-grid" id="pbGrid"></div>
+  </details>
   <div id="list"></div>
 </main>
 <div class="toast" id="toast"></div>
@@ -585,6 +608,42 @@ function drawStravaFields() {
     : `Strava isn't connected yet — <a href="#" onclick="editor.close();openConnections();return false">set it up</a>.`;
 }
 
+/* ---------- personal bests ---------- */
+const PB_LABEL = { "Half-Marathon": "Half marathon", "1/2 mile": "½ mile" };
+function fmtTime(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+let pbTimer;
+async function loadBests() {
+  let data;
+  try { data = await (await fetch("/api/bests")).json(); } catch (e) { return; }
+  const box = document.getElementById("pbs");
+  box.hidden = !data.total;
+  if (!data.total) return;
+  const analysing = data.analysed < data.total;
+  document.getElementById("pbNote").textContent = analysing
+    ? `analysing runs… ${data.analysed} of ${data.total}`
+    : `from ${data.total} runs on Strava`;
+  const bar = document.getElementById("pbBar");
+  bar.style.display = analysing ? "" : "none";
+  bar.firstElementChild.style.width = `${100 * data.analysed / data.total}%`;
+  const recent = new Date(); recent.setDate(recent.getDate() - 30);
+  document.getElementById("pbGrid").innerHTML = data.bests.length ? data.bests.map(b => {
+    const pace = b.time / (b.distance / 1609.344);
+    const isNew = parse(b.day) >= recent;
+    return `<a class="pb" href="https://www.strava.com/activities/${b.activity_id}" target="_blank" rel="noopener"
+               title="${esc(b.activity || "")} — open on Strava">
+      ${isNew ? `<span class="new">NEW</span>` : ""}
+      <div class="d">${esc(PB_LABEL[b.name] || b.name)}</div>
+      <div class="t">${fmtTime(b.time)}</div>
+      <div class="s">${fmtTime(Math.round(pace))} /mi · ${parse(b.day).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</div>
+    </a>`;
+  }).join("") : `<div class="hint">Working through your runs — bests appear here as they're found.</div>`;
+  clearTimeout(pbTimer);
+  if (analysing) pbTimer = setTimeout(loadBests, 60000);
+}
+
 /* ---------- Strava connection ---------- */
 let stravaState = {};
 async function loadStrava() { stravaState = await (await fetch("/api/strava")).json(); }
@@ -624,6 +683,7 @@ async function stravaSync() {
   await postStrava("/api/strava/sync");
   b.textContent = "Sync now"; b.disabled = false;
   api("/api/habits");
+  loadBests();
 }
 async function stravaDisconnect() {
   if (confirm("Disconnect Strava? Ticks already earned are kept.")) await postStrava("/api/strava/disconnect");
@@ -655,6 +715,7 @@ async function del() {
 }
 
 api("/api/habits");
+loadBests();
 loadStrava().then(() => {
   if (location.hash === "#strava") { history.replaceState(null, "", "/"); openConnections(); }
 });

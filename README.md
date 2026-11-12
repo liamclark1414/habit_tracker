@@ -34,5 +34,5 @@ Standard Firefox removes temporary add-ons on restart; to keep it installed, sig
 Click **⚙ Connections** and follow the steps to connect your own Strava API app (free, takes ~2 minutes;
 callback domain `localhost`). Then edit a habit and pick a Strava activity type and what counts as done:
 any activity, a minimum distance (km or miles), or a minimum moving time — per day or per week (e.g. 15 miles a week). The last year of activities is imported, so streaks
-and history fill in straight away; new activities sync on launch and every 15 minutes while the app is open.
+and history fill in straight away; new activities sync on launch and every 15 minutes while the app is open. Your full Strava history is imported, and a **Personal bests** panel shows your fastest 400m–marathon efforts across every run (worked out gradually within Strava's 100-requests-per-15-minutes limit).
 Garmin users: link Garmin Connect to Strava (Garmin Connect → Settings → Connected Apps) and runs flow through.

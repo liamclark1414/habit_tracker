@@ -35,8 +35,18 @@ def init(conn):
             name TEXT
         );
         CREATE INDEX IF NOT EXISTS strava_day ON strava_activities(day);
+        CREATE TABLE IF NOT EXISTS best_efforts (
+            activity_id INTEGER NOT NULL,
+            name TEXT NOT NULL,          -- Strava's label, e.g. "5K", "1 mile"
+            distance REAL NOT NULL,      -- metres
+            elapsed_time INTEGER NOT NULL,
+            PRIMARY KEY (activity_id, name)
+        );
         """
     )
+    acols = {r["name"] for r in conn.execute("PRAGMA table_info(strava_activities)")}
+    if "efforts_fetched" not in acols:
+        conn.execute("ALTER TABLE strava_activities ADD COLUMN efforts_fetched INTEGER NOT NULL DEFAULT 0")
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     for col, ddl in (("strava_group", "TEXT NOT NULL DEFAULT ''"),
                      ("strava_metric", "TEXT NOT NULL DEFAULT 'any'"),
@@ -114,11 +124,76 @@ def exchange_code(conn, code, state):
     put(conn, "strava_error", None)
 
 
+EFFORT_TYPES = ("Run", "TrailRun")
+# Strava's standard best-effort distances, shortest first
+EFFORT_ORDER = ["400m", "1/2 mile", "1K", "1 mile", "2 mile", "5K", "10K", "15K",
+                "10 mile", "20K", "Half-Marathon", "30K", "Marathon", "50K"]
+
+
+def fetch_efforts(db, lock, budget=80):
+    """Fetch per-run best efforts (fastest 1 mile, 5K, ...) for runs not yet analysed.
+
+    Strava allows 100 requests / 15 min, so this works through the backlog gradually."""
+    with lock, db() as conn:
+        if not get(conn, "strava_refresh_token"):
+            return
+        try:
+            token = _access_token(conn)
+        except (urllib.error.URLError, KeyError, ValueError):
+            return
+        q = ",".join("?" * len(EFFORT_TYPES))
+        ids = [r["id"] for r in conn.execute(
+            f"SELECT id FROM strava_activities WHERE efforts_fetched = 0 AND sport_type IN ({q}) "
+            f"ORDER BY day DESC LIMIT ?", (*EFFORT_TYPES, budget))]
+    for aid in ids:
+        try:
+            act = _request(f"{API}/api/v3/activities/{aid}?include_all_efforts=false", token=token)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:  # deleted or private to someone else: skip it
+                with lock, db() as conn:
+                    conn.execute("UPDATE strava_activities SET efforts_fetched = 1 WHERE id = ?", (aid,))
+                continue
+            return  # rate limited (429) or other problem: try again next cycle
+        except (urllib.error.URLError, ValueError):
+            return
+        with lock, db() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO best_efforts VALUES (?, ?, ?, ?)",
+                [(aid, e["name"], e.get("distance", 0), e["elapsed_time"])
+                 for e in act.get("best_efforts") or []])
+            conn.execute("UPDATE strava_activities SET efforts_fetched = 1 WHERE id = ?", (aid,))
+
+
+def personal_bests(conn):
+    q = ",".join("?" * len(EFFORT_TYPES))
+    total = conn.execute(f"SELECT COUNT(*) c FROM strava_activities WHERE sport_type IN ({q})",
+                         EFFORT_TYPES).fetchone()["c"]
+    done = conn.execute(f"SELECT COUNT(*) c FROM strava_activities WHERE efforts_fetched = 1 "
+                        f"AND sport_type IN ({q})", EFFORT_TYPES).fetchone()["c"]
+    rows = conn.execute(
+        "SELECT e.name, e.distance, e.elapsed_time, a.id, a.day, a.name AS activity "
+        "FROM best_efforts e JOIN strava_activities a ON a.id = e.activity_id "
+        "ORDER BY e.elapsed_time").fetchall()
+    best, history = {}, {}
+    for r in rows:
+        best.setdefault(r["name"], r)
+        history.setdefault(r["name"], 0)
+        history[r["name"]] += 1
+    order = {n: i for i, n in enumerate(EFFORT_ORDER)}
+    out = [{"name": n, "distance": r["distance"], "time": r["elapsed_time"], "day": r["day"],
+            "activity_id": r["id"], "activity": r["activity"], "count": history[n]}
+           for n, r in best.items()]
+    out.sort(key=lambda b: (order.get(b["name"], 99), b["distance"]))
+    return {"bests": out, "analysed": done, "total": total}
+
+
 def disconnect(conn):
     for k in ("strava_access_token", "strava_refresh_token", "strava_expires_at",
               "strava_athlete", "strava_last_sync", "strava_error"):
         put(conn, k, None)
     conn.execute("DELETE FROM strava_activities")
+    conn.execute("DELETE FROM best_efforts")
+    put(conn, "strava_full_history", None)
 
 
 def _access_token(conn):
@@ -146,14 +221,18 @@ def sync(db, lock):
             return
         newest = conn.execute("SELECT MAX(day) d FROM strava_activities").fetchone()["d"]
     # re-fetch the last few days each time to pick up edits; backfill a year on first sync
-    since = (date.fromisoformat(newest) - timedelta(days=3)) if newest else date.today() - timedelta(days=BACKFILL_DAYS)
-    after = int(time.mktime(since.timetuple()))
+    with db() as conn:
+        full_done = get(conn, "strava_full_history")
+    if newest and full_done:
+        after = int(time.mktime((date.fromisoformat(newest) - timedelta(days=3)).timetuple()))
+    else:
+        after = 0  # first sync: import the whole history
     acts, page = [], 1
     try:
         while True:
             batch = _request(f"{API}/api/v3/athlete/activities?after={after}&per_page=200&page={page}", token=token)
             acts += batch
-            if len(batch) < 200 or page >= 20:
+            if len(batch) < 200 or page >= 50:
                 break
             page += 1
     except (urllib.error.URLError, ValueError) as e:
@@ -162,10 +241,14 @@ def sync(db, lock):
         return
     with lock, db() as conn:
         conn.executemany(
-            "INSERT OR REPLACE INTO strava_activities VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO strava_activities (id, day, sport_type, distance, moving_time, name) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET day = excluded.day, "
+            "sport_type = excluded.sport_type, distance = excluded.distance, "
+            "moving_time = excluded.moving_time, name = excluded.name",
             [(a["id"], a["start_date_local"][:10], a.get("sport_type") or a.get("type", ""),
               a.get("distance", 0), a.get("moving_time", 0), a.get("name", "")) for a in acts])
         put(conn, "strava_last_sync", time.strftime("%Y-%m-%d %H:%M"))
+        put(conn, "strava_full_history", "1")
         put(conn, "strava_error", None)
         apply(conn)
 

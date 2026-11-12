@@ -252,6 +252,9 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         if self.path == "/api/habits":
             return self._json(list_habits())
+        if self.path == "/api/bests":
+            with db() as conn:
+                return self._json(strava.personal_bests(conn))
         if self.path == "/api/strava":
             with db() as conn:
                 return self._json(strava.status(conn))
@@ -298,6 +301,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad json"}, 400)
         if self.path == "/api/strava/sync":
             strava.sync(db, _db_lock)
+            strava.fetch_efforts(db, _db_lock, budget=10)
             with db() as conn:
                 return self._json(strava.status(conn))
         with _db_lock, db() as conn:
@@ -377,6 +381,7 @@ def strava_loop():
     while True:
         try:
             strava.sync(db, _db_lock)
+            strava.fetch_efforts(db, _db_lock)
         except Exception as e:
             print("Strava sync error:", e)
         time.sleep(15 * 60)
