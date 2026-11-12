@@ -108,6 +108,22 @@ def streaks(days, done, today):
     return cur, max(best, cur)
 
 
+def week_streaks(done, today):
+    """Streaks for weekly habits, counted in consecutive completed weeks."""
+    weeks = {strava.week_start(d) for d in done}
+    this = strava.week_start(today)
+    cur, w = 0, this if this in weeks else this - timedelta(days=7)
+    while w in weeks:
+        cur += 1
+        w -= timedelta(days=7)
+    best = run = 0
+    prev = None
+    for w in sorted(weeks):
+        run = run + 1 if prev and w - prev == timedelta(days=7) else 1
+        best, prev = max(best, run), w
+    return cur, best
+
+
 def list_habits():
     today = date.today()
     with db() as conn:
@@ -118,14 +134,17 @@ def list_habits():
         for h in habits:
             done = {r["day"] for r in conn.execute(
                 "SELECT day FROM checks WHERE habit_id = ?", (h["id"],))}
-            cur, best = streaks(h["days"], done, today)
+            weekly = h["period"] == "week" and bool(h["strava_group"])
+            cur, best = week_streaks(done, today) if weekly else streaks(h["days"], done, today)
             row = conn.execute(
                 "SELECT seconds FROM activity WHERE habit_id = ? AND day = ?",
                 (h["id"], today.isoformat())).fetchone()
             if h["strava_group"]:
                 metric = h["strava_metric"]
-                progress = {"value": strava.day_value(conn, h["strava_group"], metric, today.isoformat()),
-                            "goal": h["strava_goal"] if metric in ("km", "min") and h["strava_goal"] else 1,
+                value = (strava.week_value if weekly else strava.day_value)(
+                    conn, h["strava_group"], metric, today.isoformat())
+                progress = {"value": value,
+                            "goal": h["strava_goal"] if metric in ("km", "mi", "min") and h["strava_goal"] else 1,
                             "unit": strava.UNITS[metric]}
             elif h["goal_minutes"]:
                 progress = {"value": (row["seconds"] if row else 0) // 60,
@@ -140,6 +159,9 @@ def list_habits():
                 "today_seconds": row["seconds"] if row else 0,
                 "strava_group": h["strava_group"], "strava_metric": h["strava_metric"],
                 "strava_goal": h["strava_goal"], "progress": progress,
+                "period": "week" if weekly else "day",
+                "week_done": weekly and strava.week_start(today) in {strava.week_start(d) for d in done},
+                "activity_days": strava.activity_days(conn, h["strava_group"]) if weekly else [],
             })
     return {"today": today.isoformat(), "habits": out}
 
@@ -180,7 +202,8 @@ def clean_strava(data):
         goal = max(0.0, float(data.get("strava_goal") or 0))
     except ValueError:
         goal = 0.0
-    return group, metric, goal
+    period = "week" if group and data.get("period") == "week" else "day"
+    return group, metric, goal, period
 
 
 def clean_days(v):
@@ -300,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "name required"}, 400)
                 conn.execute(
                     "INSERT INTO habits (name, color, days, created, goal_minutes, auto_domain, "
-                    "strava_group, strava_metric, strava_goal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "strava_group, strava_metric, strava_goal, period) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (name, str(data.get("color", "#4f8cff"))[:9],
                      clean_days(data.get("days", "0123456")) or "0123456",
                      date.today().isoformat(), max(0, int(data.get("goal_minutes") or 0)),
@@ -310,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = str(data.get("name", "")).strip()[:80]
                 conn.execute(
                     "UPDATE habits SET name = ?, color = ?, days = ?, goal_minutes = ?, "
-                    "auto_domain = ?, strava_group = ?, strava_metric = ?, strava_goal = ? WHERE id = ?",
+                    "auto_domain = ?, strava_group = ?, strava_metric = ?, strava_goal = ?, period = ? WHERE id = ?",
                     (name, str(data.get("color"))[:9],
                      clean_days(data.get("days")) or "0123456",
                      max(0, int(data.get("goal_minutes") or 0)),
@@ -320,6 +343,9 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute("DELETE FROM habits WHERE id = ?", (int(data["id"]),))
             elif self.path == "/api/toggle":
                 hid, day = int(data["id"]), date.fromisoformat(data["day"]).isoformat()
+                if conn.execute("SELECT 1 FROM habits WHERE id = ? AND period = 'week' AND strava_group != ''",
+                                (hid,)).fetchone():
+                    return self._json({"error": "weekly habits are tracked automatically"}, 400)
                 if day > date.today().isoformat():
                     return self._json({"error": "future date"}, 400)
                 cur = conn.execute(

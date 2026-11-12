@@ -113,6 +113,13 @@
   .cell.done { background: var(--c); }
   .cell.future { visibility: hidden; }
   .cell.today { box-shadow: 0 0 0 1.5px var(--text); }
+  .heat.weekly { grid-template-rows: 5px repeat(7, 12px); }
+  .heat.weekly .cell { cursor: default; }
+  .cell.act { background: color-mix(in srgb, var(--c) 45%, var(--empty)); }
+  .cell.wk { height: 5px; border-radius: 3px; }
+  .cell.wk.done { background: var(--gold); }
+  .check.auto { cursor: default; }
+  .check.auto:hover .core, .check.auto:active .core { transform: none; }
 
   .toast { position: fixed; left: 50%; bottom: 32px; transform: translate(-50%, 40px); opacity: 0;
            background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-weight: 600;
@@ -217,8 +224,8 @@
     <h2 id="edTitle" style="margin:0">New habit</h2>
     <label for="edName">Name</label>
     <input type="text" id="edName" maxlength="80" required placeholder="e.g. Read 20 pages">
-    <label>Days</label>
-    <div class="days" id="edDays"></div>
+    <div id="edDaysWrap"><label>Days</label>
+    <div class="days" id="edDays"></div></div>
     <label for="edGoal">Daily goal in minutes (optional)</label>
     <input type="text" id="edGoal" inputmode="numeric" placeholder="e.g. 15">
     <label for="edDomain">Auto-track time on website (optional, needs browser extension)</label>
@@ -239,11 +246,16 @@
         <span>Done when</span>
         <select id="edStravaMetric" onchange="drawStravaFields()">
           <option value="any">I do any</option>
-          <option value="km">distance reaches</option>
+          <option value="mi">distance reaches (miles)</option>
+          <option value="km">distance reaches (km)</option>
           <option value="min">moving time reaches</option>
         </select>
-        <input type="text" id="edStravaGoal" inputmode="decimal" placeholder="5">
+        <input type="text" id="edStravaGoal" inputmode="decimal" placeholder="15">
         <span id="edStravaUnit"></span>
+        <select id="edPeriod" onchange="drawStravaFields()">
+          <option value="day">each day</option>
+          <option value="week">each week (Mon–Sun)</option>
+        </select>
       </div>
       <div class="hint" id="edStravaHint"></div>
     </fieldset>
@@ -295,7 +307,7 @@ function schedLabel(days) {
 /* ---------- summary ---------- */
 function dayStats(d) {
   const k = iso(d);
-  const due = state.habits.filter(h => isDue(h, d) && (h.created <= k || h.checks.includes(k)));
+  const due = state.habits.filter(h => h.period !== "week" && isDue(h, d) && (h.created <= k || h.checks.includes(k)));
   const done = due.filter(h => h.checks.includes(k)).length;
   return { due: due.length, done };
 }
@@ -335,14 +347,14 @@ function render() {
   const today = parse(state.today);
   const perfect = renderHero(today);
   const list = document.getElementById("list");
-  const doneNow = new Set(state.habits.filter(h => h.checks.includes(state.today)).map(h => h.id));
+  const doneNow = new Set(state.habits.filter(h => h.period === "week" ? h.week_done : h.checks.includes(state.today)).map(h => h.id));
 
   if (!state.habits.length) {
     list.innerHTML = `<div class="card empty">No habits yet. Add your first one to get started.</div>`;
   } else {
     const start = new Date(today); start.setDate(start.getDate() - wd(today) - (WEEKS-1)*7);
     list.innerHTML = state.habits.map(h => cardHTML(h, today, start)).join("");
-    list.querySelectorAll(".cell:not(.future)").forEach(c =>
+    list.querySelectorAll(".heat:not(.weekly) .cell:not(.future)").forEach(c =>
       c.onclick = () => toggle(+c.closest(".card").dataset.id, c.dataset.day));
   }
 
@@ -357,17 +369,25 @@ function render() {
 
 function cardHTML(h, today, start) {
   const done = new Set(h.checks);
-  const due = isDue(h, today);
-  const doneToday = done.has(state.today);
+  const weekly = h.period === "week";
+  const due = weekly || isDue(h, today);
+  const doneToday = weekly ? h.week_done : done.has(state.today);
   const p = h.progress;
   const measured = p && p.unit !== "activity";
   const frac = doneToday ? 1 : measured ? Math.min(1, p.value / p.goal) : 0;
-  const num = v => p.unit === "km" ? (+v).toFixed(1).replace(/\.0$/, "") : Math.floor(v);
+  const num = v => p.unit === "km" || p.unit === "mi" ? (+v).toFixed(1).replace(/\.0$/, "") : Math.floor(v);
+  const daysLeft = 7 - wd(today);  // including today
   const source = h.strava_group ? ` · <span class="strava-badge">Strava</span>` : h.auto_domain ? ` · ${esc(h.auto_domain)}` : "";
   const verb = { run: "Go for a run", walk: "Go for a walk", ride: "Go for a ride", swim: "Go for a swim", any: "Get moving" }[h.strava_group];
 
   let status;
-  if (doneToday) status = h.streak > 1 ? `Done — ${h.streak} in a row!` : "Done for today ✓";
+  if (weekly) {
+    const left = `${daysLeft} day${daysLeft > 1 ? "s" : ""} left`;
+    status = doneToday ? (h.streak > 1 ? `Week complete — ${h.streak} weeks in a row!` : "Week complete ✓")
+      : measured ? `${num(p.value)} of ${num(p.goal)} ${p.unit} this week — ${num(p.goal - p.value)} to go · ${left}`
+      : `${verb} this week · ${left}`;
+  }
+  else if (doneToday) status = h.streak > 1 ? `Done — ${h.streak} in a row!` : "Done for today ✓";
   else if (!due) status = "Rest day";
   else if (measured && p.value > 0) status = `${num(p.value)} of ${num(p.goal)} ${p.unit} — ${num(p.goal - p.value)} to go`;
   else if (measured) status = `${num(p.goal)} ${p.unit} to go`;
@@ -375,10 +395,17 @@ function cardHTML(h, today, start) {
   else status = h.streak > 0 ? `Keep your ${h.streak}-day streak alive` : "Tap the circle when done";
 
   let cells = "";
+  const acts = new Set(h.activity_days || []);
+  const doneWeeks = new Set([...done].map(k => { const d = parse(k); d.setDate(d.getDate() - wd(d)); return iso(d); }));
   for (let i = 0; i < WEEKS*7; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const k = iso(d), cls = ["cell"];
+    if (weekly && i % 7 === 0) {
+      cells += `<div class="cell wk ${doneWeeks.has(k) ? "done" : ""}" title="Week of ${d.toDateString()}${doneWeeks.has(k) ? " — goal met" : ""}"></div>`;
+    }
+    const wkDone = weekly && (() => { const m = new Date(d); m.setDate(m.getDate() - wd(m)); return doneWeeks.has(iso(m)); })();
     if (d > today) cls.push("future");
+    else if (weekly) { if (acts.has(k)) cls.push(wkDone ? "done" : "act"); }
     else if (done.has(k)) cls.push("done");
     else if (!isDue(h, d)) cls.push("off");
     if (k === state.today) cls.push("today");
@@ -387,8 +414,8 @@ function cardHTML(h, today, start) {
 
   return `<div class="card ${doneToday ? "done" : ""} ${!due && !doneToday ? "rest" : ""}" style="--c:${h.color}" data-id="${h.id}">
     <div class="row">
-      <button class="check" ${!due && !doneToday ? "disabled" : ""} onclick="toggle(${h.id}, '${state.today}')"
-              title="${doneToday ? "Mark not done" : "Mark done"}">
+      <button class="check ${weekly ? "auto" : ""}" ${!due && !doneToday ? "disabled" : ""}
+              ${weekly ? `title="Tracked automatically from Strava"` : `onclick="toggle(${h.id}, '${state.today}')" title="${doneToday ? "Mark not done" : "Mark done"}"`}>
         <svg width="60" height="60" viewBox="0 0 60 60">
           <circle class="track" cx="30" cy="30" r="26" fill="none" stroke-width="5"/>
           <circle class="prog" cx="30" cy="30" r="26" fill="none" stroke-width="5" stroke-linecap="round"
@@ -402,15 +429,15 @@ function cardHTML(h, today, start) {
       <div class="grow">
         <div class="name">${esc(h.name)}</div>
         <div class="status">${status}</div>
-        <div class="meta">${schedLabel(h.days)}${source}</div>
+        <div class="meta">${weekly ? "Weekly goal" : schedLabel(h.days)}${source}</div>
       </div>
       <div class="streak ${h.streak > 0 ? "hot" : ""}" title="Current streak (best ${h.best})">
         <span class="n">${h.streak}</span> <span class="flame">🔥</span>
-        <div class="best">best ${h.best}</div>
+        <div class="best">${weekly ? "weeks · " : ""}best ${h.best}</div>
       </div>
       <button class="icon" title="Edit" onclick="openEditor(${h.id})">✎</button>
     </div>
-    <div class="heat">${cells}</div>
+    <div class="heat ${weekly ? "weekly" : ""}">${cells}</div>
   </div>`;
 }
 
@@ -430,6 +457,8 @@ function celebrate(id, perfectDay) {
   chime(perfectDay);
   if (perfectDay) {
     setTimeout(() => { rain(); toast("Perfect day! Every habit done 🎉"); }, 300);
+  } else if (h.period === "week") {
+    toast(h.streak > 1 ? `Weekly goal smashed — ${h.streak} weeks in a row! 🏃` : `Weekly goal smashed! 🏃`);
   } else if (MILESTONES[h.streak]) {
     toast(`${esc(h.name)}: ${MILESTONES[h.streak]}`);
   } else {
@@ -528,6 +557,7 @@ function openEditor(id) {
   document.getElementById("edStrava").value = editing ? editing.strava_group : "";
   document.getElementById("edStravaMetric").value = editing ? editing.strava_metric : "any";
   document.getElementById("edStravaGoal").value = editing && editing.strava_goal ? editing.strava_goal : "";
+  document.getElementById("edPeriod").value = editing ? editing.period : "day";
   drawStravaFields();
   document.getElementById("edDelete").style.visibility = editing ? "visible" : "hidden";
   edDays = new Set(editing ? editing.days : "0123456");
@@ -547,7 +577,9 @@ function drawStravaFields() {
   const metric = document.getElementById("edStravaMetric").value;
   document.getElementById("edStravaGoalRow").style.display = on ? "flex" : "none";
   document.getElementById("edStravaGoal").style.display = metric === "any" ? "none" : "";
-  document.getElementById("edStravaUnit").textContent = metric === "km" ? "km" : metric === "min" ? "minutes" : "activity";
+  document.getElementById("edStravaUnit").textContent = { km: "km", mi: "miles", min: "minutes", any: "activity" }[metric];
+  const weekly = on && document.getElementById("edPeriod").value === "week";
+  document.getElementById("edDaysWrap").style.display = weekly ? "none" : "";
   document.getElementById("edStravaHint").innerHTML = !on ? "" : stravaState.connected
     ? "Past activities count too, so your history fills in automatically."
     : `Strava isn't connected yet — <a href="#" onclick="editor.close();openConnections();return false">set it up</a>.`;
@@ -608,7 +640,9 @@ async function save() {
     auto_domain: document.getElementById("edDomain").value.trim(),
     strava_group: document.getElementById("edStrava").value,
     strava_metric: document.getElementById("edStravaMetric").value,
-    strava_goal: parseFloat(document.getElementById("edStravaGoal").value) || 0 };
+    strava_goal: parseFloat(document.getElementById("edStravaGoal").value) || 0,
+    period: document.getElementById("edPeriod").value };
+  if (body.strava_group && body.period === "week") body.days = "0123456";
   if (body.strava_group && body.strava_metric !== "any" && !body.strava_goal) { alert("Enter a goal for Strava tracking."); return; }
   if (editing) await api("/api/habits/update", { ...body, id: editing.id });
   else await api("/api/habits/create", body);

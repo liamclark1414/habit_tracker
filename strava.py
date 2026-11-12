@@ -18,7 +18,8 @@ GROUPS = {
     "swim": {"Swim"},
     "any": None,  # any activity
 }
-UNITS = {"km": "km", "min": "min", "any": "activity"}
+UNITS = {"km": "km", "mi": "mi", "min": "min", "any": "activity"}
+METRES_PER_MILE = 1609.344
 
 
 def init(conn):
@@ -39,7 +40,8 @@ def init(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     for col, ddl in (("strava_group", "TEXT NOT NULL DEFAULT ''"),
                      ("strava_metric", "TEXT NOT NULL DEFAULT 'any'"),
-                     ("strava_goal", "REAL NOT NULL DEFAULT 0")):
+                     ("strava_goal", "REAL NOT NULL DEFAULT 0"),
+                     ("period", "TEXT NOT NULL DEFAULT 'day'")):
         if col not in cols:
             conn.execute(f"ALTER TABLE habits ADD COLUMN {col} {ddl}")
 
@@ -168,10 +170,21 @@ def sync(db, lock):
         apply(conn)
 
 
-def day_value(conn, group, metric, day):
+def week_start(day):
+    d = date.fromisoformat(day) if isinstance(day, str) else day
+    return d - timedelta(days=d.weekday())
+
+
+def _rows(conn, group, first, last):
     types = GROUPS.get(group)
-    rows = conn.execute("SELECT sport_type, distance, moving_time FROM strava_activities WHERE day = ?", (day,))
-    rows = [r for r in rows if types is None or r["sport_type"] in types]
+    rows = conn.execute("SELECT day, sport_type, distance, moving_time FROM strava_activities "
+                        "WHERE day BETWEEN ? AND ?", (first, last))
+    return [r for r in rows if types is None or r["sport_type"] in types]
+
+
+def _measure(rows, metric):
+    if metric == "mi":
+        return round(sum(r["distance"] for r in rows) / METRES_PER_MILE, 2)
     if metric == "km":
         return round(sum(r["distance"] for r in rows) / 1000, 2)
     if metric == "min":
@@ -179,14 +192,40 @@ def day_value(conn, group, metric, day):
     return len(rows)
 
 
+def day_value(conn, group, metric, day):
+    return _measure(_rows(conn, group, day, day), metric)
+
+
+def week_value(conn, group, metric, day):
+    ws = week_start(day)
+    return _measure(_rows(conn, group, ws.isoformat(), (ws + timedelta(days=6)).isoformat()), metric)
+
+
+def activity_days(conn, group):
+    return sorted({r["day"] for r in _rows(conn, group, "0000", "9999")})
+
+
 def meets(metric, value, goal):
-    return value >= (goal if metric in ("km", "min") and goal > 0 else 1)
+    return value >= (goal if metric in ("km", "mi", "min") and goal > 0 else 1)
 
 
 def apply(conn):
     """Tick every day on which a Strava-linked habit's goal was met."""
     days = [r["day"] for r in conn.execute("SELECT DISTINCT day FROM strava_activities")]
     for h in conn.execute("SELECT * FROM habits WHERE strava_group != ''").fetchall():
+        if h["period"] == "week":
+            # weekly habits are fully automatic: tick the day the weekly total crosses the goal
+            conn.execute("DELETE FROM checks WHERE habit_id = ?", (h["id"],))
+            weeks = {}
+            for r in _rows(conn, h["strava_group"], "0000", "9999"):
+                weeks.setdefault(week_start(r["day"]), []).append(r)
+            for rows in weeks.values():
+                rows.sort(key=lambda r: r["day"])
+                for i, r in enumerate(rows):
+                    if meets(h["strava_metric"], _measure(rows[:i + 1], h["strava_metric"]), h["strava_goal"]):
+                        conn.execute("INSERT OR IGNORE INTO checks VALUES (?, ?)", (h["id"], r["day"]))
+                        break
+            continue
         for day in days:
             if meets(h["strava_metric"], day_value(conn, h["strava_group"], h["strava_metric"], day), h["strava_goal"]):
                 conn.execute("INSERT OR IGNORE INTO checks VALUES (?, ?)", (h["id"], day))
