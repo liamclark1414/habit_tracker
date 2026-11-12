@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7385;
-    --border: #e2e5eb; --empty: #ebedf0; --off: transparent; --accent: #4f8cff;
+    --border: #e2e5eb; --empty: #ebedf0; --accent: #4f8cff; --gold: #f5a623;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #14161b; --card: #1e2128; --text: #e8eaf0; --muted: #8b93a5;
@@ -16,31 +16,110 @@
   * { box-sizing: border-box; }
   body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--text); }
   main { max-width: 900px; margin: 0 auto; padding: 24px 16px 60px; }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  h1 { margin: 0; font-size: 24px; }
-  .sub { color: var(--muted); }
   button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border);
            background: var(--card); color: var(--text); padding: 6px 12px; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-top: 16px; }
-  .row { display: flex; align-items: center; gap: 12px; }
-  .check { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--c); background: none;
-           padding: 0; flex: none; font-size: 20px; color: #fff; }
-  .check.done { background: var(--c); }
-  .check:disabled { opacity: .35; cursor: default; }
-  .name { font-weight: 600; font-size: 17px; }
-  .meta { color: var(--muted); font-size: 13px; }
+  .icon { border: none; background: none; color: var(--muted); padding: 4px 6px; font-size: 16px; }
+
+  /* ---------- Today summary ---------- */
+  .hero { display: flex; align-items: center; gap: 24px; background: var(--card); border: 1px solid var(--border);
+          border-radius: 16px; padding: 20px 24px; transition: background .6s, border-color .6s; }
+  .hero.perfect { background: linear-gradient(135deg, #fff6e0, #ffe9b8); border-color: var(--gold); color: #3a2a00; }
+  @media (prefers-color-scheme: dark) { .hero.perfect { background: linear-gradient(135deg, #3a2c0a, #4a3608); color: #ffe7a8; } }
+  .hero-ring { position: relative; width: 110px; height: 110px; flex: none; }
+  .hero-ring svg { transform: rotate(-90deg); }
+  .hero-ring .track { stroke: var(--empty); }
+  .hero-ring .fill { stroke: var(--accent); transition: stroke-dashoffset .8s cubic-bezier(.3,1.4,.5,1), stroke .6s; }
+  .hero.perfect .hero-ring .fill { stroke: var(--gold); }
+  .hero-ring .label { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+  .hero-ring .big { font-size: 28px; font-weight: 800; line-height: 1; }
+  .hero-ring .small { font-size: 12px; color: var(--muted); }
+  .hero.perfect .small { color: inherit; opacity: .8; }
+  .hero-text { flex: 1; min-width: 0; }
+  .hero-text h1 { margin: 0; font-size: 26px; }
+  .hero-text .date { color: var(--muted); margin-bottom: 6px; }
+  .hero.perfect .date { color: inherit; opacity: .75; }
+  .motto { font-size: 17px; font-weight: 600; }
+  .week { display: flex; gap: 8px; margin-top: 12px; }
+  .wday { text-align: center; font-size: 11px; color: var(--muted); }
+  .hero.perfect .wday { color: inherit; opacity: .8; }
+  .wdot { width: 22px; height: 22px; border-radius: 50%; margin: 0 auto 2px; background: var(--empty);
+          position: relative; overflow: hidden; }
+  .wdot i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); opacity: .55; }
+  .wdot.full { background: var(--gold); }
+  .wdot.full i { display: none; }
+  .wdot.full::after { content: "★"; color: #fff; font-size: 13px; position: absolute; inset: 0; display: grid; place-content: center; }
+  .wdot.today { box-shadow: 0 0 0 2px var(--text); }
+  .hero-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; align-self: flex-start; }
+
+  /* ---------- Habit cards ---------- */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-top: 14px;
+          position: relative; overflow: hidden; transition: border-color .4s, box-shadow .4s; }
+  .card::before { content: ""; position: absolute; inset: 0; background: var(--c); opacity: 0; transition: opacity .5s; pointer-events: none; }
+  .card.done { border-color: var(--c); }
+  .card.done::before { opacity: .08; }
+  .card.rest { opacity: .7; }
+  .row { display: flex; align-items: center; gap: 14px; position: relative; }
   .grow { flex: 1; min-width: 0; }
-  .streak { text-align: right; font-size: 13px; color: var(--muted); }
-  .streak b { font-size: 20px; color: var(--text); }
-  .heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 13px); gap: 3px;
-          margin-top: 12px; overflow-x: auto; padding-bottom: 4px; }
-  .cell { width: 13px; height: 13px; border-radius: 3px; background: var(--empty); cursor: pointer; }
-  .cell.off { background: var(--off); outline: 1px dashed var(--border); outline-offset: -1px; }
+  .name { font-weight: 650; font-size: 17px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .status { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .card.done .status { color: var(--c); }
+
+  .check { position: relative; width: 60px; height: 60px; flex: none; border: none; background: none; padding: 0; border-radius: 50%; }
+  .check svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .check .track { stroke: var(--empty); }
+  .check .prog { stroke: var(--c); transition: stroke-dashoffset .6s ease; }
+  .check .core { position: absolute; inset: 8px; border-radius: 50%; display: grid; place-content: center;
+                 background: transparent; border: 2px dashed color-mix(in srgb, var(--c) 45%, transparent);
+                 transition: background .3s, transform .2s; }
+  .check:hover .core { transform: scale(1.06); }
+  .check:active .core { transform: scale(.92); }
+  .check .mins { font-size: 12px; font-weight: 700; color: var(--c); }
+  .check .tick { width: 26px; height: 26px; display: none; }
+  .check .tick path { stroke: #fff; stroke-width: 3.5; fill: none; stroke-linecap: round; stroke-linejoin: round;
+                      stroke-dasharray: 30; stroke-dashoffset: 0; }
+  .card.done .check .core { background: var(--c); border: none; }
+  .card.done .check .tick { display: block; }
+  .card.done .check .mins { display: none; }
+  .check:disabled { cursor: default; opacity: .4; }
+
+  .streak { text-align: center; min-width: 60px; }
+  .streak .n { font-size: 24px; font-weight: 800; line-height: 1; display: inline-block; }
+  .streak .flame { font-size: 20px; display: inline-block; filter: grayscale(1); opacity: .4; transition: .4s; }
+  .streak.hot .flame { filter: none; opacity: 1; }
+  .streak .best { font-size: 11px; color: var(--muted); }
+
+  /* celebration animations */
+  .celebrate .check .core { animation: pop .55s cubic-bezier(.3,1.8,.5,1); }
+  .celebrate .check .tick path { animation: draw .45s .15s ease-out both; }
+  .celebrate .check::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 3px solid var(--c);
+                             animation: ring .7s ease-out forwards; pointer-events: none; }
+  .celebrate { animation: glow 1.2s ease-out; }
+  .celebrate .streak .n { animation: bump .6s .25s cubic-bezier(.3,1.8,.5,1); }
+  .celebrate .streak .flame { animation: flicker .9s .2s ease-out; }
+  @keyframes pop { 0% { transform: scale(.6); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
+  @keyframes draw { from { stroke-dashoffset: 30; } to { stroke-dashoffset: 0; } }
+  @keyframes ring { from { transform: scale(1); opacity: .9; } to { transform: scale(2.1); opacity: 0; } }
+  @keyframes glow { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 60%, transparent); }
+                    100% { box-shadow: 0 0 0 18px transparent; } }
+  @keyframes bump { 0% { transform: scale(1); } 40% { transform: scale(1.6); } 100% { transform: scale(1); } }
+  @keyframes flicker { 0%,100% { transform: scale(1) rotate(0); } 30% { transform: scale(1.5) rotate(-10deg); } 60% { transform: scale(1.2) rotate(8deg); } }
+
+  .heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); gap: 3px;
+          margin-top: 14px; overflow-x: auto; padding-bottom: 4px; position: relative; justify-content: start; }
+  .cell { width: 12px; height: 12px; border-radius: 3px; background: var(--empty); cursor: pointer; }
+  .cell.off { background: transparent; outline: 1px dashed var(--border); outline-offset: -1px; }
   .cell.done { background: var(--c); }
   .cell.future { visibility: hidden; }
   .cell.today { box-shadow: 0 0 0 1.5px var(--text); }
-  .icon { border: none; background: none; color: var(--muted); padding: 4px 6px; }
+
+  .toast { position: fixed; left: 50%; bottom: 32px; transform: translate(-50%, 40px); opacity: 0;
+           background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-weight: 600;
+           transition: .35s cubic-bezier(.3,1.4,.5,1); pointer-events: none; z-index: 20; white-space: nowrap; }
+  .toast.show { transform: translate(-50%, 0); opacity: 1; }
+  #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+
   .empty { text-align: center; color: var(--muted); padding: 40px 0; }
   dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--card); color: var(--text);
            width: min(420px, calc(100vw - 32px)); }
@@ -54,16 +133,42 @@
   .swatch.on { border-color: var(--text); }
   .actions { display: flex; justify-content: space-between; margin-top: 20px; gap: 8px; }
   .danger { color: #e5484d; }
+
+  @media (max-width: 600px) {
+    .hero { flex-wrap: wrap; gap: 16px; }
+    .hero-side { flex-direction: row; width: 100%; justify-content: space-between; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
+<canvas id="confetti"></canvas>
 <main>
-  <header>
-    <div><h1>Habit Tracker</h1><div class="sub" id="today"></div></div>
-    <button class="primary" onclick="openEditor()">+ New habit</button>
-  </header>
+  <section class="hero" id="hero">
+    <div class="hero-ring">
+      <svg width="110" height="110" viewBox="0 0 110 110">
+        <circle class="track" cx="55" cy="55" r="48" fill="none" stroke-width="10"/>
+        <circle class="fill" id="heroFill" cx="55" cy="55" r="48" fill="none" stroke-width="10"
+                stroke-linecap="round" stroke-dasharray="301.6" stroke-dashoffset="301.6"/>
+      </svg>
+      <div class="label"><div class="big" id="heroCount">0/0</div><div class="small">today</div></div>
+    </div>
+    <div class="hero-text">
+      <h1>Habit Tracker</h1>
+      <div class="date" id="today"></div>
+      <div class="motto" id="motto"></div>
+      <div class="week" id="week"></div>
+    </div>
+    <div class="hero-side">
+      <button class="primary" onclick="openEditor()">+ New habit</button>
+      <button class="icon" id="soundBtn" onclick="toggleSound()" title="Toggle sound"></button>
+    </div>
+  </section>
   <div id="list"></div>
 </main>
+<div class="toast" id="toast"></div>
 
 <dialog id="editor">
   <form method="dialog" onsubmit="save(); return false;">
@@ -92,13 +197,20 @@
 const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const COLORS = ["#4f8cff","#30a46c","#e5484d","#f76b15","#ffb224","#8e4ec6","#d6409f","#12a594"];
 const WEEKS = 18;
+const RING = 2 * Math.PI * 26; // habit button ring circumference
 let state = { today: "", habits: [] };
+let prevDone = null;          // ids done today at last render (null = first load)
+let prevPerfect = false;
 let editing = null, edDays = new Set(), edColor = COLORS[0];
+let sound = true;
+try { sound = localStorage.getItem("sound") !== "off"; } catch (e) {}
 
 const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 const parse = s => { const [y,m,d] = s.split("-").map(Number); return new Date(y, m-1, d); };
 const wd = d => (d.getDay() + 6) % 7; // Mon=0
 const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const isDue = (h, d) => h.days.includes(String(wd(d)));
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) } : {});
@@ -114,55 +226,229 @@ function schedLabel(days) {
   return [...days].map(i => DAY_NAMES[i]).join(", ");
 }
 
-function progress(h) {
-  if (!h.auto_domain && !h.goal_minutes) return "";
-  const mins = Math.floor(h.today_seconds / 60);
-  const goal = h.goal_minutes ? ` / ${h.goal_minutes}` : "";
-  return ` · ${mins}${goal} min today${h.auto_domain ? ` on ${esc(h.auto_domain)}` : ""}`;
+/* ---------- summary ---------- */
+function dayStats(d) {
+  const k = iso(d);
+  const due = state.habits.filter(h => isDue(h, d) && h.created <= k);
+  const done = due.filter(h => h.checks.includes(k)).length;
+  return { due: due.length, done };
 }
 
+function renderHero(today) {
+  const { due, done } = dayStats(today);
+  const frac = due ? done / due : 0;
+  const perfect = due > 0 && done === due;
+  document.getElementById("heroFill").style.strokeDashoffset = 301.6 * (1 - frac);
+  document.getElementById("heroCount").textContent = `${done}/${due}`;
+  document.getElementById("hero").classList.toggle("perfect", perfect);
+  document.getElementById("today").textContent =
+    today.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  const left = due - done;
+  document.getElementById("motto").textContent =
+    !state.habits.length ? "Add a habit to get started." :
+    !due ? "Rest day — nothing scheduled. Enjoy it." :
+    perfect ? "Perfect day! Everything done. 🎉" :
+    done === 0 ? `${due} habit${due > 1 ? "s" : ""} to go today. Let's start.` :
+    frac >= .5 ? `Almost there — just ${left} more!` : `Nice start! ${left} to go.`;
+
+  // last 7 days strip
+  let html = "";
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const s = dayStats(d);
+    const full = s.due > 0 && s.done === s.due;
+    html += `<div class="wday"><div class="wdot ${full ? "full" : ""} ${i === 0 ? "today" : ""}">
+      <i style="height:${s.due ? 100 * s.done / s.due : 0}%"></i></div>${DAY_NAMES[wd(d)][0]}</div>`;
+  }
+  document.getElementById("week").innerHTML = html;
+  return perfect;
+}
+
+/* ---------- cards ---------- */
 function render() {
   const today = parse(state.today);
-  document.getElementById("today").textContent =
-    today.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const perfect = renderHero(today);
   const list = document.getElementById("list");
+  const doneNow = new Set(state.habits.filter(h => h.checks.includes(state.today)).map(h => h.id));
+
   if (!state.habits.length) {
     list.innerHTML = `<div class="card empty">No habits yet. Add your first one to get started.</div>`;
-    return;
+  } else {
+    const start = new Date(today); start.setDate(start.getDate() - wd(today) - (WEEKS-1)*7);
+    list.innerHTML = state.habits.map(h => cardHTML(h, today, start)).join("");
+    list.querySelectorAll(".cell:not(.future)").forEach(c =>
+      c.onclick = () => toggle(+c.closest(".card").dataset.id, c.dataset.day));
   }
-  // heatmap start: Monday WEEKS-1 weeks ago
-  const start = new Date(today); start.setDate(start.getDate() - wd(today) - (WEEKS-1)*7);
-  list.innerHTML = state.habits.map(h => {
-    const done = new Set(h.checks);
-    const due = h.days.includes(String(wd(today)));
-    const doneToday = done.has(state.today);
-    let cells = "";
-    for (let i = 0; i < WEEKS*7; i++) {
-      const d = new Date(start); d.setDate(start.getDate() + i);
-      const k = iso(d), cls = ["cell"];
-      if (d > today) cls.push("future");
-      else if (done.has(k)) cls.push("done");
-      else if (!h.days.includes(String(wd(d)))) cls.push("off");
-      if (k === state.today) cls.push("today");
-      cells += `<div class="${cls.join(" ")}" title="${d.toDateString()}" data-day="${k}"></div>`;
-    }
-    return `<div class="card" style="--c:${h.color}" data-id="${h.id}">
-      <div class="row">
-        <button class="check ${doneToday ? "done" : ""}" ${!due && !doneToday ? "disabled title='Not scheduled today'" : ""}
-          onclick="toggle(${h.id}, '${state.today}')">${doneToday ? "✓" : ""}</button>
-        <div class="grow"><div class="name">${esc(h.name)}</div><div class="meta">${schedLabel(h.days)}${progress(h)}</div></div>
-        <div class="streak"><b>${h.streak}</b> 🔥<br>best ${h.best}</div>
-        <button class="icon" title="Edit" onclick="openEditor(${h.id})">✎</button>
+
+  // celebrate anything that just became done (clicked or auto-tracked)
+  if (prevDone) {
+    const fresh = [...doneNow].filter(id => !prevDone.has(id));
+    fresh.forEach((id, i) => setTimeout(() => celebrate(id, perfect && !prevPerfect && i === fresh.length - 1), i * 250));
+  }
+  prevDone = doneNow;
+  prevPerfect = perfect;
+}
+
+function cardHTML(h, today, start) {
+  const done = new Set(h.checks);
+  const due = isDue(h, today);
+  const doneToday = done.has(state.today);
+  const mins = Math.floor(h.today_seconds / 60);
+  const goal = h.goal_minutes;
+  const frac = doneToday ? 1 : goal ? Math.min(1, h.today_seconds / (goal * 60)) : 0;
+
+  let status;
+  if (doneToday) status = h.streak > 1 ? `Done — ${h.streak} in a row!` : "Done for today ✓";
+  else if (!due) status = "Rest day";
+  else if (goal && mins > 0) status = `${mins} of ${goal} min — ${goal - mins} to go`;
+  else if (goal) status = `${goal} min to go${h.auto_domain ? ` on ${esc(h.auto_domain)}` : ""}`;
+  else status = h.streak > 0 ? `Keep your ${h.streak}-day streak alive` : "Tap the circle when done";
+
+  let cells = "";
+  for (let i = 0; i < WEEKS*7; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const k = iso(d), cls = ["cell"];
+    if (d > today) cls.push("future");
+    else if (done.has(k)) cls.push("done");
+    else if (!isDue(h, d)) cls.push("off");
+    if (k === state.today) cls.push("today");
+    cells += `<div class="${cls.join(" ")}" title="${d.toDateString()}" data-day="${k}"></div>`;
+  }
+
+  return `<div class="card ${doneToday ? "done" : ""} ${!due && !doneToday ? "rest" : ""}" style="--c:${h.color}" data-id="${h.id}">
+    <div class="row">
+      <button class="check" ${!due && !doneToday ? "disabled" : ""} onclick="toggle(${h.id}, '${state.today}')"
+              title="${doneToday ? "Mark not done" : "Mark done"}">
+        <svg width="60" height="60" viewBox="0 0 60 60">
+          <circle class="track" cx="30" cy="30" r="26" fill="none" stroke-width="5"/>
+          <circle class="prog" cx="30" cy="30" r="26" fill="none" stroke-width="5" stroke-linecap="round"
+                  stroke-dasharray="${RING}" stroke-dashoffset="${RING * (1 - frac)}"/>
+        </svg>
+        <span class="core">
+          <svg class="tick" viewBox="0 0 26 26"><path d="M6 13.5l4.5 4.5L20 8.5"/></svg>
+          ${goal && !doneToday ? `<span class="mins">${mins}/${goal}</span>` : ""}
+        </span>
+      </button>
+      <div class="grow">
+        <div class="name">${esc(h.name)}</div>
+        <div class="status">${status}</div>
+        <div class="meta">${schedLabel(h.days)}</div>
       </div>
-      <div class="heat">${cells}</div>
-    </div>`;
-  }).join("");
-  list.querySelectorAll(".cell:not(.future)").forEach(c =>
-    c.onclick = () => toggle(+c.closest(".card").dataset.id, c.dataset.day));
+      <div class="streak ${h.streak > 0 ? "hot" : ""}" title="Current streak (best ${h.best})">
+        <span class="n">${h.streak}</span> <span class="flame">🔥</span>
+        <div class="best">best ${h.best}</div>
+      </div>
+      <button class="icon" title="Edit" onclick="openEditor(${h.id})">✎</button>
+    </div>
+    <div class="heat">${cells}</div>
+  </div>`;
 }
 
 const toggle = (id, day) => api("/api/toggle", { id, day });
 
+/* ---------- celebration ---------- */
+const MILESTONES = { 3: "3-day streak!", 7: "One week streak! 🔥", 14: "Two weeks strong!", 21: "21 days — it's a habit now!",
+                     30: "30-day streak! 🏆", 50: "50 days!", 100: "100-day streak! 💯", 365: "A whole year! 👑" };
+
+function celebrate(id, perfectDay) {
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  const h = state.habits.find(x => x.id === id);
+  if (!card || !h) return;
+  card.classList.add("celebrate");
+  const r = card.querySelector(".check").getBoundingClientRect();
+  burst(r.left + r.width / 2, r.top + r.height / 2, h.color, perfectDay ? 0 : 40);
+  chime(perfectDay);
+  if (perfectDay) {
+    setTimeout(() => { rain(); toast("Perfect day! Every habit done 🎉"); }, 300);
+  } else if (MILESTONES[h.streak]) {
+    toast(`${esc(h.name)}: ${MILESTONES[h.streak]}`);
+  } else {
+    const msgs = ["Nice work!", "Done! ✓", "Another one down!", "Keep it rolling!", "That's how it's done!"];
+    toast(h.streak > 1 ? `${h.streak} days in a row — keep going!` : msgs[Math.floor(Math.random() * msgs.length)]);
+  }
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.innerHTML = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+// confetti
+const cv = document.getElementById("confetti"), ctx = cv.getContext("2d");
+let parts = [], animating = false;
+function resize() { cv.width = innerWidth * devicePixelRatio; cv.height = innerHeight * devicePixelRatio; }
+addEventListener("resize", resize); resize();
+
+function burst(x, y, color, n) {
+  if (reduced) return;
+  const palette = [color, color, "#ffd166", "#ffffff", "#ff8fab"];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, v = 3 + Math.random() * 6;
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 3, life: 60 + Math.random() * 30,
+                 size: 4 + Math.random() * 5, rot: Math.random() * 6, vr: (Math.random() - .5) * .4,
+                 color: palette[i % palette.length] });
+  }
+  loop();
+}
+function rain() {
+  if (reduced) return;
+  const palette = state.habits.map(h => h.color).concat(["#ffd166", "#f5a623", "#ffffff"]);
+  for (let i = 0; i < 180; i++) {
+    parts.push({ x: Math.random() * innerWidth, y: -20 - Math.random() * innerHeight * .6,
+                 vx: (Math.random() - .5) * 3, vy: 2 + Math.random() * 3, life: 200, size: 5 + Math.random() * 6,
+                 rot: Math.random() * 6, vr: (Math.random() - .5) * .3, color: palette[i % palette.length] });
+  }
+  loop();
+}
+function loop() {
+  if (animating) return;
+  animating = true;
+  (function frame() {
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    parts = parts.filter(p => p.life-- > 0 && p.y < innerHeight + 20);
+    for (const p of parts) {
+      p.vy += .18; p.vx *= .99; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.globalAlpha = Math.min(1, p.life / 30);
+      ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+      ctx.restore();
+    }
+    if (parts.length) requestAnimationFrame(frame);
+    else { animating = false; ctx.clearRect(0, 0, innerWidth, innerHeight); }
+  })();
+}
+
+// sound
+let actx;
+function chime(big) {
+  if (!sound) return;
+  try {
+    actx = actx || new AudioContext();
+    const notes = big ? [523.25, 659.25, 783.99, 1046.5] : [659.25, 987.77];
+    notes.forEach((f, i) => {
+      const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime + i * .09;
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(.18, t + .015);
+      g.gain.exponentialRampToValueAtTime(.001, t + (big ? .9 : .5));
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 1);
+    });
+  } catch (e) {}
+}
+function toggleSound() {
+  sound = !sound;
+  try { localStorage.setItem("sound", sound ? "on" : "off"); } catch (e) {}
+  drawSound();
+}
+function drawSound() { document.getElementById("soundBtn").textContent = sound ? "🔊 Sound on" : "🔇 Sound off"; }
+drawSound();
+
+/* ---------- editor ---------- */
 function openEditor(id) {
   editing = state.habits.find(h => h.id === id) || null;
   document.getElementById("edTitle").textContent = editing ? "Edit habit" : "New habit";
@@ -176,7 +462,6 @@ function openEditor(id) {
   editor.showModal();
   document.getElementById("edName").focus();
 }
-
 function drawPickers() {
   document.getElementById("edDays").innerHTML = DAY_NAMES.map((n, i) =>
     `<button type="button" class="${edDays.has(String(i)) ? "on" : ""}" onclick="flipDay('${i}')">${n}</button>`).join("");
@@ -196,7 +481,6 @@ async function save() {
   else await api("/api/habits/create", body);
   editor.close();
 }
-
 async function del() {
   if (!confirm(`Delete "${editing.name}" and all its history?`)) return;
   await api("/api/habits/delete", { id: editing.id });
@@ -205,8 +489,7 @@ async function del() {
 
 api("/api/habits");
 setInterval(() => fetch("/api/ping").catch(() => {}), 20000);
-setInterval(() => api("/api/habits"), 60000); // pick up auto-tracked minutes
-// refresh at midnight / when window regains focus
+setInterval(() => api("/api/habits"), 30000); // pick up auto-tracked minutes
 window.addEventListener("focus", () => api("/api/habits"));
 </script>
 </body>
