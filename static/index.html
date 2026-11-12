@@ -133,6 +133,21 @@
   .swatch.on { border-color: var(--text); }
   .actions { display: flex; justify-content: space-between; margin-top: 20px; gap: 8px; }
   .danger { color: #e5484d; }
+  select { font: inherit; padding: 7px; border-radius: 8px; border: 1px solid var(--border);
+           background: var(--bg); color: var(--text); }
+  .inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .inline input { width: 90px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .hint a { color: var(--accent); }
+  fieldset { border: 1px solid var(--border); border-radius: 10px; margin: 14px 0 0; padding: 4px 12px 12px; }
+  legend { font-weight: 700; font-size: 13px; padding: 0 4px; }
+  ol.steps { padding-left: 20px; margin: 8px 0; font-size: 13px; }
+  ol.steps li { margin-bottom: 4px; }
+  code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.ok { background: #30a46c22; color: #30a46c; }
+  .pill.err { background: #e5484d22; color: #e5484d; }
+  .strava-badge { color: #fc4c02; font-weight: 700; }
 
   @media (max-width: 600px) {
     .hero { flex-wrap: wrap; gap: 16px; }
@@ -163,12 +178,39 @@
     </div>
     <div class="hero-side">
       <button class="primary" onclick="openEditor()">+ New habit</button>
+      <button class="icon" onclick="openConnections()" title="Connections">⚙ Connections</button>
       <button class="icon" id="soundBtn" onclick="toggleSound()" title="Toggle sound"></button>
     </div>
   </section>
   <div id="list"></div>
 </main>
 <div class="toast" id="toast"></div>
+
+<dialog id="connections">
+  <h2 style="margin:0 0 4px"><span class="strava-badge">Strava</span> connection</h2>
+  <div id="stravaStatus"></div>
+  <div id="stravaSetup">
+    <ol class="steps">
+      <li>Go to <a href="https://www.strava.com/settings/api" target="_blank" rel="noopener">strava.com/settings/api</a> and create an app.
+          Any name/website works (e.g. "Habit Tracker", <code>http://localhost</code>).</li>
+      <li>Set <b>Authorization Callback Domain</b> to <code>localhost</code>.</li>
+      <li>Copy the <b>Client ID</b> and <b>Client Secret</b> here, save, then click Connect.</li>
+    </ol>
+    <label for="stClientId">Client ID</label>
+    <input type="text" id="stClientId" inputmode="numeric">
+    <label for="stSecret">Client Secret</label>
+    <input type="text" id="stSecret" placeholder="" autocomplete="off">
+  </div>
+  <div class="actions">
+    <button type="button" class="danger" id="stDisconnect" onclick="stravaDisconnect()">Disconnect</button>
+    <span style="display:flex;gap:8px;margin-left:auto">
+      <button type="button" onclick="connections.close()">Close</button>
+      <button type="button" id="stSave" onclick="stravaSave()">Save</button>
+      <button type="button" class="primary" id="stConnect" onclick="location.href='/strava/connect'">Connect with Strava</button>
+      <button type="button" class="primary" id="stSync" onclick="stravaSync()">Sync now</button>
+    </span>
+  </div>
+</dialog>
 
 <dialog id="editor">
   <form method="dialog" onsubmit="save(); return false;">
@@ -181,6 +223,30 @@
     <input type="text" id="edGoal" inputmode="numeric" placeholder="e.g. 15">
     <label for="edDomain">Auto-track time on website (optional, needs browser extension)</label>
     <input type="text" id="edDomain" placeholder="e.g. keybr.com">
+    <fieldset>
+      <legend><span class="strava-badge">Strava</span> auto-tracking</legend>
+      <div class="inline" style="margin-top:8px">
+        <select id="edStrava" onchange="drawStravaFields()">
+          <option value="">Off</option>
+          <option value="run">Runs (incl. trail &amp; treadmill)</option>
+          <option value="walk">Walks &amp; hikes</option>
+          <option value="ride">Rides</option>
+          <option value="swim">Swims</option>
+          <option value="any">Any activity</option>
+        </select>
+      </div>
+      <div class="inline" id="edStravaGoalRow" style="margin-top:8px">
+        <span>Done when</span>
+        <select id="edStravaMetric" onchange="drawStravaFields()">
+          <option value="any">I do any</option>
+          <option value="km">distance reaches</option>
+          <option value="min">moving time reaches</option>
+        </select>
+        <input type="text" id="edStravaGoal" inputmode="decimal" placeholder="5">
+        <span id="edStravaUnit"></span>
+      </div>
+      <div class="hint" id="edStravaHint"></div>
+    </fieldset>
     <label>Colour</label>
     <div class="colors" id="edColors"></div>
     <div class="actions">
@@ -229,7 +295,7 @@ function schedLabel(days) {
 /* ---------- summary ---------- */
 function dayStats(d) {
   const k = iso(d);
-  const due = state.habits.filter(h => isDue(h, d) && h.created <= k);
+  const due = state.habits.filter(h => isDue(h, d) && (h.created <= k || h.checks.includes(k)));
   const done = due.filter(h => h.checks.includes(k)).length;
   return { due: due.length, done };
 }
@@ -293,15 +359,19 @@ function cardHTML(h, today, start) {
   const done = new Set(h.checks);
   const due = isDue(h, today);
   const doneToday = done.has(state.today);
-  const mins = Math.floor(h.today_seconds / 60);
-  const goal = h.goal_minutes;
-  const frac = doneToday ? 1 : goal ? Math.min(1, h.today_seconds / (goal * 60)) : 0;
+  const p = h.progress;
+  const measured = p && p.unit !== "activity";
+  const frac = doneToday ? 1 : measured ? Math.min(1, p.value / p.goal) : 0;
+  const num = v => p.unit === "km" ? (+v).toFixed(1).replace(/\.0$/, "") : Math.floor(v);
+  const source = h.strava_group ? ` · <span class="strava-badge">Strava</span>` : h.auto_domain ? ` · ${esc(h.auto_domain)}` : "";
+  const verb = { run: "Go for a run", walk: "Go for a walk", ride: "Go for a ride", swim: "Go for a swim", any: "Get moving" }[h.strava_group];
 
   let status;
   if (doneToday) status = h.streak > 1 ? `Done — ${h.streak} in a row!` : "Done for today ✓";
   else if (!due) status = "Rest day";
-  else if (goal && mins > 0) status = `${mins} of ${goal} min — ${goal - mins} to go`;
-  else if (goal) status = `${goal} min to go${h.auto_domain ? ` on ${esc(h.auto_domain)}` : ""}`;
+  else if (measured && p.value > 0) status = `${num(p.value)} of ${num(p.goal)} ${p.unit} — ${num(p.goal - p.value)} to go`;
+  else if (measured) status = `${num(p.goal)} ${p.unit} to go`;
+  else if (verb) status = `${verb} — it'll tick itself`;
   else status = h.streak > 0 ? `Keep your ${h.streak}-day streak alive` : "Tap the circle when done";
 
   let cells = "";
@@ -326,13 +396,13 @@ function cardHTML(h, today, start) {
         </svg>
         <span class="core">
           <svg class="tick" viewBox="0 0 26 26"><path d="M6 13.5l4.5 4.5L20 8.5"/></svg>
-          ${goal && !doneToday ? `<span class="mins">${mins}/${goal}</span>` : ""}
+          ${measured && !doneToday ? `<span class="mins">${num(p.value)}/${num(p.goal)}</span>` : ""}
         </span>
       </button>
       <div class="grow">
         <div class="name">${esc(h.name)}</div>
         <div class="status">${status}</div>
-        <div class="meta">${schedLabel(h.days)}</div>
+        <div class="meta">${schedLabel(h.days)}${source}</div>
       </div>
       <div class="streak ${h.streak > 0 ? "hot" : ""}" title="Current streak (best ${h.best})">
         <span class="n">${h.streak}</span> <span class="flame">🔥</span>
@@ -455,6 +525,10 @@ function openEditor(id) {
   document.getElementById("edName").value = editing ? editing.name : "";
   document.getElementById("edGoal").value = editing && editing.goal_minutes ? editing.goal_minutes : "";
   document.getElementById("edDomain").value = editing ? editing.auto_domain : "";
+  document.getElementById("edStrava").value = editing ? editing.strava_group : "";
+  document.getElementById("edStravaMetric").value = editing ? editing.strava_metric : "any";
+  document.getElementById("edStravaGoal").value = editing && editing.strava_goal ? editing.strava_goal : "";
+  drawStravaFields();
   document.getElementById("edDelete").style.visibility = editing ? "visible" : "hidden";
   edDays = new Set(editing ? editing.days : "0123456");
   edColor = editing ? editing.color : COLORS[state.habits.length % COLORS.length];
@@ -468,6 +542,61 @@ function drawPickers() {
   document.getElementById("edColors").innerHTML = COLORS.map(c =>
     `<button type="button" class="swatch ${c === edColor ? "on" : ""}" style="background:${c}" onclick="edColor='${c}';drawPickers()"></button>`).join("");
 }
+function drawStravaFields() {
+  const on = !!document.getElementById("edStrava").value;
+  const metric = document.getElementById("edStravaMetric").value;
+  document.getElementById("edStravaGoalRow").style.display = on ? "flex" : "none";
+  document.getElementById("edStravaGoal").style.display = metric === "any" ? "none" : "";
+  document.getElementById("edStravaUnit").textContent = metric === "km" ? "km" : metric === "min" ? "minutes" : "activity";
+  document.getElementById("edStravaHint").innerHTML = !on ? "" : stravaState.connected
+    ? "Past activities count too, so your history fills in automatically."
+    : `Strava isn't connected yet — <a href="#" onclick="editor.close();openConnections();return false">set it up</a>.`;
+}
+
+/* ---------- Strava connection ---------- */
+let stravaState = {};
+async function loadStrava() { stravaState = await (await fetch("/api/strava")).json(); }
+async function postStrava(path, body) {
+  const r = await fetch(path, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body || {}) });
+  stravaState = await r.json();
+  drawConnections();
+}
+async function openConnections() {
+  await loadStrava();
+  drawConnections();
+  if (!connections.open) connections.showModal();
+}
+function drawConnections() {
+  const s = stravaState;
+  document.getElementById("stravaStatus").innerHTML = s.connected
+    ? `<p><span class="pill ok">Connected</span> ${s.athlete ? esc(s.athlete) : ""}<br>
+       <span class="hint">${s.activities} activities synced · last sync ${s.last_sync || "pending…"} · syncs every 15 min while open</span></p>`
+    : `<p class="hint">Pull your runs from Strava (Garmin syncs to Strava automatically) to tick habits on their own.</p>`;
+  if (s.error) document.getElementById("stravaStatus").innerHTML += `<p><span class="pill err">Problem</span> <span class="hint">${esc(s.error)}</span></p>`;
+  document.getElementById("stravaSetup").style.display = s.connected ? "none" : "";
+  document.getElementById("stClientId").value = s.client_id || "";
+  document.getElementById("stSecret").placeholder = s.has_secret ? "saved — leave blank to keep" : "";
+  document.getElementById("stDisconnect").style.display = s.connected ? "" : "none";
+  document.getElementById("stSave").style.display = s.connected ? "none" : "";
+  document.getElementById("stConnect").style.display = !s.connected && s.client_id && s.has_secret ? "" : "none";
+  document.getElementById("stSync").style.display = s.connected ? "" : "none";
+}
+async function stravaSave() {
+  await postStrava("/api/strava/settings", { client_id: document.getElementById("stClientId").value,
+                                              client_secret: document.getElementById("stSecret").value });
+  document.getElementById("stSecret").value = "";
+}
+async function stravaSync() {
+  const b = document.getElementById("stSync");
+  b.textContent = "Syncing…"; b.disabled = true;
+  await postStrava("/api/strava/sync");
+  b.textContent = "Sync now"; b.disabled = false;
+  api("/api/habits");
+}
+async function stravaDisconnect() {
+  if (confirm("Disconnect Strava? Ticks already earned are kept.")) await postStrava("/api/strava/disconnect");
+}
+
 function flipDay(i) { edDays.has(i) ? edDays.delete(i) : edDays.add(i); drawPickers(); }
 
 async function save() {
@@ -476,7 +605,11 @@ async function save() {
   if (!edDays.size) { alert("Pick at least one day."); return; }
   const body = { name, color: edColor, days: [...edDays].sort().join(""),
     goal_minutes: parseInt(document.getElementById("edGoal").value) || 0,
-    auto_domain: document.getElementById("edDomain").value.trim() };
+    auto_domain: document.getElementById("edDomain").value.trim(),
+    strava_group: document.getElementById("edStrava").value,
+    strava_metric: document.getElementById("edStravaMetric").value,
+    strava_goal: parseFloat(document.getElementById("edStravaGoal").value) || 0 };
+  if (body.strava_group && body.strava_metric !== "any" && !body.strava_goal) { alert("Enter a goal for Strava tracking."); return; }
   if (editing) await api("/api/habits/update", { ...body, id: editing.id });
   else await api("/api/habits/create", body);
   editor.close();
@@ -488,6 +621,9 @@ async function del() {
 }
 
 api("/api/habits");
+loadStrava().then(() => {
+  if (location.hash === "#strava") { history.replaceState(null, "", "/"); openConnections(); }
+});
 setInterval(() => fetch("/api/ping").catch(() => {}), 20000);
 setInterval(() => api("/api/habits"), 30000); // pick up auto-tracked minutes
 window.addEventListener("focus", () => api("/api/habits"));

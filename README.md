@@ -29,3 +29,10 @@ To track other sites, add them to `content_scripts.matches` in `extension/manife
 **Load it:** open `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → pick `extension/manifest.json`.
 Standard Firefox removes temporary add-ons on restart; to keep it installed, sign it for free as an unlisted add-on
 (`npx web-ext sign --channel=unlisted` in `extension/`, with an addons.mozilla.org API key) and install the resulting `.xpi`.
+
+## Strava auto-tracking (runs, rides, walks, swims)
+Click **⚙ Connections** and follow the steps to connect your own Strava API app (free, takes ~2 minutes;
+callback domain `localhost`). Then edit a habit and pick a Strava activity type and what counts as done:
+any activity, a minimum distance, or a minimum moving time. The last year of activities is imported, so streaks
+and history fill in straight away; new activities sync on launch and every 15 minutes while the app is open.
+Garmin users: link Garmin Connect to Strava (Garmin Connect → Settings → Connected Apps) and runs flow through.

@@ -14,10 +14,13 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import webbrowser
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import strava
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("HABIT_TRACKER_PORT", "8765"))
@@ -68,6 +71,7 @@ def init_db():
             conn.execute("ALTER TABLE habits ADD COLUMN goal_minutes INTEGER NOT NULL DEFAULT 0")
         if "auto_domain" not in cols:
             conn.execute("ALTER TABLE habits ADD COLUMN auto_domain TEXT NOT NULL DEFAULT ''")
+        strava.init(conn)
 
 
 def scheduled(days, d):
@@ -118,12 +122,24 @@ def list_habits():
             row = conn.execute(
                 "SELECT seconds FROM activity WHERE habit_id = ? AND day = ?",
                 (h["id"], today.isoformat())).fetchone()
+            if h["strava_group"]:
+                metric = h["strava_metric"]
+                progress = {"value": strava.day_value(conn, h["strava_group"], metric, today.isoformat()),
+                            "goal": h["strava_goal"] if metric in ("km", "min") and h["strava_goal"] else 1,
+                            "unit": strava.UNITS[metric]}
+            elif h["goal_minutes"]:
+                progress = {"value": (row["seconds"] if row else 0) // 60,
+                            "goal": h["goal_minutes"], "unit": "min"}
+            else:
+                progress = None
             out.append({
                 "id": h["id"], "name": h["name"], "color": h["color"],
                 "days": h["days"], "created": h["created"],
                 "checks": sorted(done), "streak": cur, "best": best,
                 "goal_minutes": h["goal_minutes"], "auto_domain": h["auto_domain"],
                 "today_seconds": row["seconds"] if row else 0,
+                "strava_group": h["strava_group"], "strava_metric": h["strava_metric"],
+                "strava_goal": h["strava_goal"], "progress": progress,
             })
     return {"today": today.isoformat(), "habits": out}
 
@@ -153,6 +169,18 @@ def record_activity(conn, host, day, seconds):
                              (h["id"], day)).fetchone()["seconds"]
         if total >= h["goal_minutes"] * 60:
             conn.execute("INSERT OR IGNORE INTO checks VALUES (?, ?)", (h["id"], day))
+
+
+def clean_strava(data):
+    group = str(data.get("strava_group") or "")
+    group = group if group in strava.GROUPS else ""
+    metric = str(data.get("strava_metric") or "any")
+    metric = metric if metric in strava.UNITS else "any"
+    try:
+        goal = max(0.0, float(data.get("strava_goal") or 0))
+    except ValueError:
+        goal = 0.0
+    return group, metric, goal
 
 
 def clean_days(v):
@@ -185,6 +213,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _body(self):
         n = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(n) or b"{}")
@@ -192,8 +226,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         global _last_seen
         _last_seen = time.time()
+        url = urllib.parse.urlparse(self.path)
         if self.path == "/api/habits":
             return self._json(list_habits())
+        if self.path == "/api/strava":
+            with db() as conn:
+                return self._json(strava.status(conn))
+        if url.path == "/strava/connect":
+            with _db_lock, db() as conn:
+                return self._redirect(strava.auth_url(conn, f"http://localhost:{PORT}/strava/callback"))
+        if url.path == "/strava/callback":
+            q = urllib.parse.parse_qs(url.query)
+            if "code" in q:
+                try:
+                    with _db_lock, db() as conn:
+                        strava.exchange_code(conn, q["code"][0], q.get("state", [""])[0])
+                except Exception as e:  # show the problem in the app instead of crashing
+                    with _db_lock, db() as conn:
+                        strava.put(conn, "strava_error", f"Connecting failed: {e}")
+                threading.Thread(target=strava.sync, args=(db, _db_lock), daemon=True).start()
+            return self._redirect(f"http://{HOST}:{PORT}/#strava")
         if self.path == "/api/ping":
             return self._json({"ok": True})
         name = "index.html" if self.path in ("/", "/index.html") else None
@@ -221,7 +273,19 @@ class Handler(BaseHTTPRequestHandler):
             data = self._body()
         except json.JSONDecodeError:
             return self._json({"error": "bad json"}, 400)
+        if self.path == "/api/strava/sync":
+            strava.sync(db, _db_lock)
+            with db() as conn:
+                return self._json(strava.status(conn))
         with _db_lock, db() as conn:
+            if self.path == "/api/strava/settings":
+                strava.put(conn, "strava_client_id", str(data.get("client_id", "")).strip()[:20])
+                if data.get("client_secret"):
+                    strava.put(conn, "strava_client_secret", str(data["client_secret"]).strip()[:100])
+                return self._json(strava.status(conn))
+            if self.path == "/api/strava/disconnect":
+                strava.disconnect(conn)
+                return self._json(strava.status(conn))
             if self.path == "/api/activity":
                 # {"host": "keybr.com", "days": {"2026-11-11": 120, ...}}
                 for day, secs in dict(data.get("days", {})).items():
@@ -235,21 +299,23 @@ class Handler(BaseHTTPRequestHandler):
                 if not name:
                     return self._json({"error": "name required"}, 400)
                 conn.execute(
-                    "INSERT INTO habits (name, color, days, created, goal_minutes, auto_domain) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO habits (name, color, days, created, goal_minutes, auto_domain, "
+                    "strava_group, strava_metric, strava_goal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (name, str(data.get("color", "#4f8cff"))[:9],
                      clean_days(data.get("days", "0123456")) or "0123456",
                      date.today().isoformat(), max(0, int(data.get("goal_minutes") or 0)),
-                     clean_domain(data.get("auto_domain"))))
+                     clean_domain(data.get("auto_domain")), *clean_strava(data)))
+                strava.apply(conn)
             elif self.path == "/api/habits/update":
                 name = str(data.get("name", "")).strip()[:80]
                 conn.execute(
                     "UPDATE habits SET name = ?, color = ?, days = ?, goal_minutes = ?, "
-                    "auto_domain = ? WHERE id = ?",
+                    "auto_domain = ?, strava_group = ?, strava_metric = ?, strava_goal = ? WHERE id = ?",
                     (name, str(data.get("color"))[:9],
                      clean_days(data.get("days")) or "0123456",
                      max(0, int(data.get("goal_minutes") or 0)),
-                     clean_domain(data.get("auto_domain")), int(data["id"])))
+                     clean_domain(data.get("auto_domain")), *clean_strava(data), int(data["id"])))
+                strava.apply(conn)
             elif self.path == "/api/habits/delete":
                 conn.execute("DELETE FROM habits WHERE id = ?", (int(data["id"]),))
             elif self.path == "/api/toggle":
@@ -280,6 +346,16 @@ def open_window(url):
     webbrowser.open(url)
 
 
+def strava_loop():
+    """Sync Strava on startup and every 15 minutes while the app runs."""
+    while True:
+        try:
+            strava.sync(db, _db_lock)
+        except Exception as e:
+            print("Strava sync error:", e)
+        time.sleep(15 * 60)
+
+
 def idle_watchdog(server):
     while True:
         time.sleep(15)
@@ -295,6 +371,7 @@ def main():
         return
     init_db()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
+    threading.Thread(target=strava_loop, daemon=True).start()
     if "--no-browser" not in sys.argv:
         threading.Thread(target=idle_watchdog, args=(server,), daemon=True).start()
         threading.Timer(0.3, open_window, args=(url,)).start()
